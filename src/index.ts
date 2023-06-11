@@ -1,33 +1,66 @@
 import { Context, Schema, h, Database } from 'koishi';
-// import { createPool, Pool, PoolConfig } from 'mysql'
 import { createCanvas, loadImage } from 'canvas';
-import { pathToFileURL } from 'url';
-import { resolve } from 'path';
 import fs from 'fs';
 import axios from 'axios';
 import path from 'path';
 import { readFileSync, writeFileSync } from 'fs';
-import { userInfo } from 'os';
 import { PassThrough } from 'stream';
 
 // TypeScript 用户需要进行类型合并
 declare module 'koishi' {
   interface Tables {
-    schedule: Schedule
+    cck_user: Cck_user
+    cck_set: Cck_set
   }
 }
 
+export interface Cck_user {
+  id: number,
+  platform: string,
+  userId: string,
+  guildId: string,
+  counts: number,
+}
+
+export interface Cck_set {
+  // 各字段类型
+  id: number
+  status: number,
+  platform: string,
+  guildId: string,
+  answer_now: number,
+  card_id_now: number,
+  answer_pre: number,
+  card_id_pre: number,
+  counts: number,
+  rcd_time: string,
+}
+
+export interface Config {
+  cd: number
+}
 export const name = 'test';
 
 export interface Config { }
 
 // 在控制台页面显示介绍
-export const usage = '猜 BanGDream！角色卡面游戏～';
+export const usage = '猜BanGDream！角色卡面游戏～\n此插件依赖「bestdori.com」';
 
-export const Config: Schema<Config> = Schema.object({});
+export const schema = Schema.object({
+  cd: Schema.number().default(5)
+  .description('上一轮结束后与开始之间的冷却(单位s)(建议设置大于5s，否则可能导致图片预下载失败)'),
+})
+// export const Config: Schema<Config> = Schema.object({
+//   width: Schema.number().default(100).description('默认图片宽度。'),
+//   height: Schema.number().default(100).description('默认图片高度。'),
+// })
 
-export function apply(ctx: Context) {
+// export const Config: Schema<Config> = Schema.object({});
 
+export function apply(ctx: Context, config: Config) {
+
+
+  // let cd: number = 5 // cck的cd时间
 
   // 启用时尝试创建文件夹
   const folderPath = path.resolve(__dirname, '..', 'assets', 'cards');
@@ -40,13 +73,13 @@ export function apply(ctx: Context) {
   }
   // 启用时尝试创建数据表
   try {
-    ctx.model.extend('test4_cck_user', {
+    ctx.model.extend('cck_user', {
       // 各字段类型
-      id: 'integer',
+      id: 'unsigned',
       platform: 'string',
-      userId: 'number',
-      guildId: 'number',
-      counts: 'number',
+      userId: 'string',
+      guildId: 'string',
+      counts: 'integer',
 
     }, {
       // 使用自增的主键值
@@ -59,17 +92,17 @@ export function apply(ctx: Context) {
 
   // 启用时尝试创建数据表2
   try {
-    ctx.model.extend('test7_cck_set', {
+    ctx.model.extend('cck_set', {
       // 各字段类型
       id: 'integer',
-      status: 'number',
+      status: 'integer',
       platform: 'string',
-      guildId: 'number',
-      answer_now: 'number',
-      card_id_now: 'number',
-      answer_pre: 'number',
-      card_id_pre: 'number',
-      counts: 'number',
+      guildId: 'string',
+      answer_now: 'integer',
+      card_id_now: 'integer',
+      answer_pre: 'integer',
+      card_id_pre: 'integer',
+      counts: 'integer',
       rcd_time: 'string',
     }, {
       // 使用自增的主键值
@@ -92,7 +125,6 @@ export function apply(ctx: Context) {
     // 解析JSON为JavaScript对象
     cck_json = JSON.parse(data);
   });
-
 
   // 检查下载all.json
   async function loadCardsData() {
@@ -118,6 +150,21 @@ export function apply(ctx: Context) {
 
 
   const cutImagesPath = path.resolve(__dirname, '../assets/cards');
+
+    // 提一下实现方法
+  // 第一次运行cck：
+  // 1.先下载卡面，切三份切片，保存本地，命名「answer_now」,保存本地
+  // 2.发送「猜猜是谁（三份切片）」（前端任务完成）
+  // 3.下载下一次卡面，切3份，覆盖本地3份，下载原图，命名为「answer_pre」
+  // 此时，assets/cards/内有「answer_pre」「answer_now」「三张卡（下次用）」
+  // 第二次运行cck：
+  // 1.发送「猜猜是谁（三份切片）」（前端任务完成）
+  // 2.删除上一次的「answer_now」，重命名「answer_pre」为「answer_now」
+  // 3.下载下一次卡面，切3份，覆盖本地3份，下载原图，命名为「answer_pre」
+  // 此时，assets/cards/内有「answer_pre」「answer_now」「三张卡（下次用）」
+  // 第三次运行cck：
+  // ...
+  // 完成闭环
 
 
   // 使用 fs.readdirSync 函数读取 cutImagesPath 目录下的所有文件，并将文件列表保存在 files 变量中。
@@ -168,7 +215,7 @@ export function apply(ctx: Context) {
       const buffer = canvas.toBuffer('image/jpeg');
       writeFileSync(outputImagePath, buffer);
 
-      console.log(`切割完成，保存为 ${outputImagePath}`);
+      // console.log(`切割完成，保存为 ${outputImagePath}`);
     } catch (error) {
       console.error('切割图片时出错:', error);
     }
@@ -202,7 +249,7 @@ export function apply(ctx: Context) {
           imageUrl = `https://bestdori.com/assets/jp/characters/resourceset/${randomCard.resourceSetName}_rip/${randomChoice}.png`;
         }
       }
-      console.log(randomCard);
+      // console.log(randomCard);
 
       return {
         imageUrl: imageUrl,
@@ -222,23 +269,42 @@ export function apply(ctx: Context) {
       const images = getCutImages(platform, guildId);
       // 有缓存
       if (images.length > 0) {
-        const result = await ctx.database.get('test7_cck_set', { platform: platform, guildId: guildId });
+        const result = await ctx.database.get('cck_set', { platform: platform, guildId: guildId });
 
-        // if (result.length > 0) {
-        const status = result[0].status;
-        // console.log(status);
-        if (status === 1) {
-          session.send(`游戏正在进行中ing，可以发送bzd结束～`);
-          return
-        }
-        else {
-          // 开始了不管
+        const rcdTime = result[0].rcd_time; // 获取数据库中的时间字符串
+
+        const currentTime = new Date(); // 获取当前时间
+        const rcdDate = new Date(rcdTime); // 将数据库中的时间字符串转换为日期对象
+        const timeDiff = currentTime.getTime() - rcdDate.getTime(); // 计算时间差（毫秒）
+        const secondDiff = Math.floor((timeDiff / 1000) % 60); // 计算秒数差异
+        const minuteDiff = Math.floor(timeDiff / (1000 * 60)); // 将时间差转换为分钟
+        // console.log('timeDiff', secondDiff);
+
+        // 超过一分钟可以无视status直接开始
+        if (minuteDiff > 1) {
+          PassThrough
+        } else {
+          // if (result.length > 0) {
+          const status = result[0].status;
+          // console.log(status);
+          if (secondDiff < config.cd) {
+            return
+          }
+          if (status === 1) {
+            session.send(`游戏正在进行中ing，可以发送bzd结束～`);
+            return
+          }
+          else {
+            // 开始了不管
+            PassThrough
+          }
           PassThrough
         }
 
+
         const images = getCutImages(platform, guildId);
         if (images.length > 0) {
-          await ctx.database.set('test7_cck_set', { platform: platform, guildId: guildId }, {
+          await ctx.database.set('cck_set', { platform: platform, guildId: guildId }, {
             status: 1, // 设置 status 为 1
           })
           session.send(`猜猜她是谁吧～\n${images.map(image => h.image(image)).join('\n')}`);
@@ -256,8 +322,10 @@ export function apply(ctx: Context) {
         const RandomCardMsg = await getRandomCardMsg();
         const imageUrl = RandomCardMsg.imageUrl;
         const cardId = RandomCardMsg.cardId;
+        const cardId_number: number = parseInt(cardId);
         const characterId = RandomCardMsg.characterId;
         const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_pre.png`);
+        const rcd_time = new Date().toISOString(); // 获取当前时间并转换为 ISO 8601 格式的字符串
         await downloadImage(imageUrl, imagePath);
 
         // 切割图片并保存三次
@@ -269,16 +337,16 @@ export function apply(ctx: Context) {
           answer_now: result[0].answer_now, // 设置 answer_now 初始值为空字符串
           card_id_now: result[0].card_id_now, // 设置 card_id_now 初始值为 0
           answer_pre: characterId, // 设置 answer_pre 初始值为空字符串
-          card_id_pre: cardId, // 设置 card_id_pre 初始值为 0
+          card_id_pre: cardId_number, // 设置 card_id_pre 初始值为 0
           counts: 1, // 设置 counts 初始值为 1
-          rcd_time: "" // 设置 rcd_time 初始值为空字符串
+          rcd_time: rcd_time // 设置 rcd_time 初始值为空字符串
         }];
         PassThrough
-        await ctx.database.upsert('test7_cck_set', rows, ['platform', 'guildId']);
+        await ctx.database.upsert('cck_set', rows, ['platform', 'guildId']);
       }
       // 第一次使用
       else {
-        session.send(`初始化ing～\n玩法介绍：\n将会筛选3/4/5星随机卡面\n随机裁剪三份\n玩家需要发送「是xxx」来猜测，例如：\n「是ksm」「是香澄」\n如果不知道可以发送「不知道/bzd」\n每人有三次回答机会～`);
+        session.send(`初始化ing～(请稍等)\n玩法介绍：\n将会筛选3/4/5星随机卡面\n随机裁剪三份\n玩家需要发送「是xxx」来猜测，例如：\n「是ksm」「是香澄」「是猫猫头」\n如果不知道可以发送「不知道/bzd」\n每人有三次回答机会～`);
         // 下载图片逻辑，保存为 "answer_now"
         const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_pre.png`);
         const RandomCardMsg = await getRandomCardMsg();
@@ -288,19 +356,25 @@ export function apply(ctx: Context) {
         // 操作set数据库
         const answer_now = RandomCardMsg.characterId;
         const card_id_now = RandomCardMsg.cardId;
+        const card_id_now_number: number = parseInt(card_id_now);
+        const rcd_time = new Date(); // 获取当前时间的 Date 对象
+        rcd_time.setSeconds(rcd_time.getSeconds() - 3 - config.cd); // 将秒数 - (3+cd) 秒，模拟在 (3+cd) 秒前结束过游戏
+
+        const rcd_timeString = rcd_time.toISOString(); // 将修改后的时间转换为 ISO 8601 格式的字符串
+        // console.log(rcd_timeString);
         const rows = [{
           platform: platform,
           guildId: guildId,
           status: 0,
           answer_now: answer_now,
-          card_id_now: card_id_now,
+          card_id_now: card_id_now_number,
           answer_pre: 1,
           card_id_pre: 1,
           counts: 1,
-          rcd_time: ""
+          rcd_time: rcd_timeString // 十秒前的时间，以便于直接cck
         }];
         PassThrough
-        await ctx.database.upsert('test7_cck_set', rows, ['platform', 'guildId']);
+        await ctx.database.upsert('cck_set', rows, ['platform', 'guildId']);
 
 
         // 切割图片并保存三次
@@ -313,134 +387,139 @@ export function apply(ctx: Context) {
   });
 
 
-
-
-
-
   ctx.middleware(async (session, next) => {
     if (session.content.startsWith('是')) {
       const platform = session.platform;
       const userId = session.userId;
       const guildId = session.guildId;
+      const result_set = await ctx.database.get('cck_set', { platform, guildId });
+      const result_user = await ctx.database.get('cck_user', { platform, userId, guildId }, ['counts']);
 
-      const result = await ctx.database.get('test4_cck_user', { platform, userId, guildId }, ['counts']);
+      const status = result_set[0].status;
+      const answer = result_set[0].answer_now;
+      const card_id_now = result_set[0].card_id_now;
+
+      // 如果没进行就不继续下面的代码了
+      if (status === 0) {
+        return;
+      } else {
+        // 在cck
+        // 执行相关操作
+      }
 
       // 提取输入中的词语
       const keyword = session.content.substring(1).trim();
       // 检查是否存在词语
       let found = false;
-      let number: number = null;
-      let answer: number = null;
+      let number = null;
 
       for (const [key, values] of Object.entries(cck_json)) {
         if (values.includes(keyword)) {
           found = true;
           const num = parseInt(key, 10);
           number = num;
-          const result = await ctx.database.get('test7_cck_set', { platform, guildId }, ['answer_now']);
-          if (result.length > 0) {
-            answer = result[0].answer_now;
-            console.log(answer);
-            console.log(number);
-          }
         }
       }
 
-      if (found) {
-        if (number && answer) {
-          // 操作数据库
-          if (result.length > 0) {
-            // 先确保你的回答是邦的人物
-            const counts = result[0].counts;
-
-            if (counts === 3) {
-              await session.send(`${h.at({ id: userId })}你已经回答三次啦～`);
-              return;
-            }
-
-            const rows = [{ platform, userId, guildId, counts: { $add: [{ $: 'counts' }, 1] } }];
-            await ctx.database.upsert('test4_cck_user', rows, ['platform', 'userId', 'guildId']);
-          } else {
-            // 如果不存在匹配的数据行，则规定 counts 为 1
-            const rows = [{ platform, userId, guildId, counts: 1 }];
-            await ctx.database.upsert('test4_cck_user', rows, ['platform', 'userId', 'guildId']);
-          }
-
-          if (number === answer) {
-            console.log(`编号 ${number} 和答案匹配`);
-            // 「一」设置数据库操作
-            const result = await ctx.database.get('test7_cck_set', { platform: platform, guildId: guildId });
-            console.log(result[0].answer_pre);
-            console.log(result[0].card_id_pre);
-            const rows = [{
-              platform: platform,
-              guildId: guildId,
-              status: 0, // 设置初始值为 0 表示结束
-              answer_now: result[0].answer_pre, // 
-              card_id_now: result[0].card_id_pre, //
-              answer_pre: 2, // 设置 answer_pre 1
-              card_id_pre: 2, // 设置 card_id_pre 初始值为 1
-              counts: 1, // 设置 counts 初始值为 1
-              rcd_time: "" // 设置 rcd_time 初始值为空字符串
-            }];
-            await ctx.database.upsert('test7_cck_set', rows, ['platform', 'guildId']);
-
-            // 「二」发送消息（前端任务结束）
-            const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_now.png`);
-            // 读取本地图片文件
-            const imageBufferRead = fs.readFileSync(imagePath);
-            // 将图片转换为 Base64
-            const base64Image = imageBufferRead.toString('base64');
-            // 构造 data URI
-            const dataUri = `data:image/png;base64,${base64Image}`;
-            // 发送图片
-            session.send(`${h.at({ id: userId })}正确！答案是————\n${h.image(dataUri)}`);
-
-            // 「三」用户数据库释放（数据库任务结束）
-            await ctx.database.remove('test4_cck_user', { guildId, platform });
-          } else {
-            console.log(`编号 ${number} 和答案不匹配`);
-            PassThrough
-          }
-        }
-        // 如果不是邦的人物
-      } else {
-        PassThrough
+      if (!found) {
+        return;
       }
+
+      if (number && answer) {
+        // 操作数据库
+        // console.log(result_user);
+        if (result_user.length > 0) {
+          // 先确保你的回答是邦的人物
+          const counts = result_user[0].counts;
+
+          if (counts === 3) {
+            await session.send(`${h.at({ id: userId })}你已经回答三次啦～`);
+            return;
+          }
+          const counts_new = counts + 1;
+
+          const rows = [{ platform, userId, guildId, counts: counts_new }];
+          await ctx.database.upsert('cck_user', rows, ['platform', 'userId', 'guildId']);
+        } else {
+          // 如果不存在匹配的数据行，则规定 counts 为 1
+          const rows = [{ platform, userId, guildId, counts: 1 }];
+          await ctx.database.upsert('cck_user', rows, ['platform', 'userId', 'guildId']);
+        }
+
+        if (number === answer) {
+          // console.log(`编号 ${number} 和答案匹配`);
+          const numberString = number.toString();
+
+          const lp_name = cck_json[numberString][0];
+
+          // 「一」设置数据库操作
+          const result = await ctx.database.get('cck_set', { platform: platform, guildId: guildId });
+          // console.log(result[0].answer_pre);
+          // console.log(result[0].card_id_pre);
+          const rcd_time = new Date().toISOString(); // 获取当前时间并转换为 ISO 8601 格式的字符串
+          const newRows = [{
+            platform: platform,
+            guildId: guildId,
+            status: 0, // 设置初始值为 0 表示结束
+            answer_now: result[0].answer_pre, //
+            card_id_now: result[0].card_id_pre, //
+            answer_pre: 2, // 设置 answer_pre 1
+            card_id_pre: 2, // 设置 card_id_pre 初始值为 1
+            counts: 1, // 设置 counts 初始值为 1
+            rcd_time: rcd_time // 设置 rcd_time 为当前时间
+          }];
+          await ctx.database.upsert('cck_set', newRows, ['platform', 'guildId']);
+
+          // 「二」发送消息（前端任务结束）
+          const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_now.png`);
+          // 读取本地图片文件
+          const imageBufferRead = fs.readFileSync(imagePath);
+          // 将图片转换为 Base64
+          const base64Image = imageBufferRead.toString('base64');
+          // 构造 data URI
+          const dataUri = `data:image/png;base64,${base64Image}`;
+          // 发送图片
+          session.send(`${h.at({ id: session.userId })}正确！答案是————${lp_name}\n${h.image(dataUri)}\ncard_id: ${card_id_now}\ncd被设置为 ${config.cd} 秒`);
+
+          // 「三」用户数据库释放（数据库任务结束）
+          await ctx.database.remove('cck_user', { guildId, platform });
+        } else {
+          // console.log(`编号 ${number} 和答案不匹配`);
+          // 执行其他操作
+        }
+      }
+    } else {
+      // 执行其他操作
     }
 
     return next();
   });
-
-
-
-  // 提一下实现方法
-  // 第一次运行cck：
-  // 1.先下载卡面，切三份切片，保存本地，命名「answer_now」,保存本地
-  // 2.发送「猜猜是谁（三份切片）」（前端任务完成）
-  // 3.下载下一次卡面，切3份，覆盖本地3份，下载原图，命名为「answer_pre」
-  // 此时，assets/cards/内有「answer_pre」「answer_now」「三张卡（下次用）」
-  // 第二次运行cck：
-  // 1.发送「猜猜是谁（三份切片）」（前端任务完成）
-  // 2.删除上一次的「answer_now」，重命名「answer_pre」为「answer_now」
-  // 3.下载下一次卡面，切3份，覆盖本地3份，下载原图，命名为「answer_pre」
-  // 此时，assets/cards/内有「answer_pre」「answer_now」「三张卡（下次用）」
-  // 第三次运行cck：
-  // ...
-  // 完成闭环
-
-
-
 
   // cck结束「回答正确/bzd」，删除所有「平台，guildId相符」的数据
   ctx.middleware(async (session, next) => {
     if (['不知道', 'bzd'].includes(session.content)) {
       const guildId = session.guildId;
       const platform = session.platform;
+
+      const result = await ctx.database.get('cck_set', { platform: platform, guildId: guildId });
+      const card_id_now = result[0].card_id_now;
+      const status = result[0].status;
+      const answer_now = result[0].answer_now;
+
+      // 如果没进行就不继续下面的代码了
+      if (status === 0) {
+        return
+      }
+      else {
+        // 在cck
+        PassThrough
+      }
+
       // 「一」设置数据库操作
-      const result = await ctx.database.get('test7_cck_set', { platform: platform, guildId: guildId });
-      console.log(result[0].answer_pre);
-      console.log(result[0].card_id_pre);
+
+      // console.log(result[0].answer_pre);
+      // console.log(result[0].card_id_pre);
+      const rcd_time = new Date().toISOString(); // 获取当前时间并转换为 ISO 8601 格式的字符串
       const rows = [{
         platform: platform,
         guildId: guildId,
@@ -450,9 +529,9 @@ export function apply(ctx: Context) {
         answer_pre: 2, // 设置 answer_pre 1
         card_id_pre: 2, // 设置 card_id_pre 初始值为 1
         counts: 1, // 设置 counts 初始值为 1
-        rcd_time: "" // 设置 rcd_time 初始值为空字符串
+        rcd_time: rcd_time // 设置 rcd_time 初始值为空字符串
       }];
-      await ctx.database.upsert('test7_cck_set', rows, ['platform', 'guildId']);
+      await ctx.database.upsert('cck_set', rows, ['platform', 'guildId']);
 
       // 「二」发送消息（前端任务结束）
       const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_now.png`);
@@ -462,13 +541,15 @@ export function apply(ctx: Context) {
       const base64Image = imageBufferRead.toString('base64');
       // 构造 data URI
       const dataUri = `data:image/png;base64,${base64Image}`;
+      // 答案编号「answer_now」：number变成 键名：string
+      const numberString = answer_now.toString();
+
+      const lp_name = cck_json[numberString][0];
       // 发送图片
-      session.send(`答案是————\n${h.image(dataUri)}`);
+      session.send(`答案是————${lp_name}\n${h.image(dataUri)}\ncard_id: ${card_id_now}\ncd被设置为 ${config.cd} 秒`);
 
       // 「三」用户数据库释放（数据库任务结束）
-      await ctx.database.remove('test4_cck_user', { guildId, platform });
-
-
+      await ctx.database.remove('cck_user', { guildId, platform });
 
       return next();
     } else {
@@ -477,90 +558,41 @@ export function apply(ctx: Context) {
   });
 
   ctx.middleware(async (session, next) => {
-    if (session.content === '12') {
+    if (session.content === 'cck -D') {
       const platform = session.platform;
       const guildId = session.guildId;
-      
-      try {
-        // 第二个参数也可以使用上面介绍的查询表达式
-        await ctx.database.set('test7_cck_set', { platform: platform, guildId: guildId }, {
-          status: 2, // 设置 status 为 1
-        })
+      const folderPathDelete = path.resolve(__dirname, '..', 'assets', 'cards');
+      // console.log(folderPathDelete);
 
-        
-      } catch (error) {
-        session.send('内部错误。');
-        console.error('内部错误。', error);
+      const filePrefix = platform + '_' + guildId;
+
+      if (fs.existsSync(folderPathDelete)) {
+        const files = fs.readdirSync(folderPathDelete);
+        files.forEach((file) => {
+          const filePath = path.join(folderPathDelete, file);
+          // console.log(filePath);
+          const stats = fs.statSync(filePath);
+
+          if (stats.isFile() && file.startsWith(filePrefix)) {
+            fs.unlinkSync(filePath);
+            console.log(`文件 ${filePath} 已成功删除！`);
+          }
+        });
+      } else {
+        console.log(`文件夹 ${folderPathDelete} 不存在。`);
       }
+
       return next();
     } else {
       return next();
     }
   });
 
+  ctx.command('邦邦猜卡', 'BanG Dream！卡面猜猜看！')
+    .usage('开始游戏：\n「cck」// 猜猜看\n猜测，例如：\n「是ksm」「是香澄」「是猫猫头」\n结束游戏：\n「不知道」「bzd」\n每人有三次回答机会，默认cd为5秒\n重置资源：\n「cck -D」')
+  PassThrough
+
 }
-
-
-
-
-
-
-
-
-
-
-// ctx.middleware(async (session, next) => {
-//   if (session.content === '/card') {
-//     const platform = session.platform;
-//     try {
-//       const cards = await loadCardsData();
-
-//       // 筛选稀有度大于5的卡片
-//       const rareCards = Object.values(cards).filter(card => card.rarity > 2);
-
-//       if (rareCards.length > 0) {
-//         // 随机选择一张稀有度大于5的卡片
-//         const randomCard = rareCards[Math.floor(Math.random() * rareCards.length)];
-
-//         // 构造图片URL
-//         const imageUrl = `https://bestdori.com/assets/jp/characters/resourceset/${randomCard.resourceSetName}_rip/card_normal.png`;
-
-//         // 下载图片
-//         const imagePath = path.resolve(__dirname, `../assets/cards/${randomCard.characterId}.png`);
-//         const response = await axios.get(imageUrl, { responseType: 'stream' });
-//         response.data.pipe(fs.createWriteStream(imagePath));
-
-//         response.data.on('end', () => {
-//           // 读取本地图片文件
-//           const imageBufferRead = fs.readFileSync(imagePath);
-
-//           // 将图片转换为 Base64
-//           const base64Image = imageBufferRead.toString('base64');
-
-//           // 构造 data URI
-//           const dataUri = `data:image/png;base64,${base64Image}`;
-
-//           // 发送图片
-//           session.send(`这是随机的稀有度大于2的卡面：\n${h.image(dataUri)}`);
-
-//           //
-//         });
-//       } else {
-//         session.send('没有找到稀有度大于2的卡片。');
-//       }
-//     } catch (error) {
-//       session.send('内部错误。');
-//       console.error('内部错误。', error);
-//     }
-//     return next();
-//   } else {
-//     return next();
-//   }
-// });
-
-
-
-
 
 
 
