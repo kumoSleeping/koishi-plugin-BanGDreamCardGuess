@@ -1,10 +1,11 @@
 import { Context, Schema, h, Database } from 'koishi';
-import { createCanvas, loadImage } from 'canvas';
 import fs from 'fs';
-import axios from 'axios';
 import path from 'path';
-import { readFileSync, writeFileSync } from 'fs';
+// import { readFileSync, writeFileSync } from 'fs';
 import { PassThrough } from 'stream';
+import Jimp from 'jimp';
+
+
 
 // TypeScript 用户需要进行类型合并
 declare module 'koishi' {
@@ -38,6 +39,9 @@ export interface Cck_set {
 
 export interface Config {
   cd: number
+  cut_length: number
+  cut_width: number
+  cut_count: number
 }
 export const name = 'test';
 
@@ -48,7 +52,13 @@ export const usage = '猜BanGDream！角色卡面游戏～\n此插件依赖「be
 
 export const schema = Schema.object({
   cd: Schema.number().default(5)
-  .description('上一轮结束后与开始之间的冷却(单位s)(建议设置大于5s，否则可能导致图片预下载失败)'),
+    .description('上一轮结束后的冷却时间(单位s)【建议设置大于4s，否则可能导致图片预下载失败】'),
+  cut_length: Schema.number().default(100)
+    .description('切片高度(<1002)【修改后下一轮游戏结束后生效】'),
+  cut_width: Schema.number().default(300)
+    .description('切片宽度(<1334)【修改后下一轮游戏结束后生效】'),
+  cut_count: Schema.number().default(3)
+    .description('切片数量【修改后请使用指令「cck -R」清空所有已裁剪缓存】'),
 })
 // export const Config: Schema<Config> = Schema.object({
 //   width: Schema.number().default(100).description('默认图片宽度。'),
@@ -138,8 +148,8 @@ export function apply(ctx: Context, config: Config) {
       cards = JSON.parse(allCardsContent);
     } else {
       // 发送请求获取卡片数据
-      const response = await axios.get('https://bestdori.com/api/cards/all.5.json');
-      cards = response.data;
+      const responseData = await ctx.http('get', 'https://bestdori.com/api/cards/all.5.json');
+      cards = responseData;
 
       // 保存卡片数据到本地
       fs.writeFileSync(allCardsPath, JSON.stringify(cards));
@@ -149,9 +159,9 @@ export function apply(ctx: Context, config: Config) {
   }
 
 
-  const cutImagesPath = path.resolve(__dirname, '../assets/cards');
+  const cutImagesPath = path.resolve(__dirname, '../assets/cards'.replace(':', ''));
 
-    // 提一下实现方法
+  // 提一下实现方法
   // 第一次运行cck：
   // 1.先下载卡面，切三份切片，保存本地，命名「answer_now」,保存本地
   // 2.发送「猜猜是谁（三份切片）」（前端任务完成）
@@ -176,11 +186,15 @@ export function apply(ctx: Context, config: Config) {
   // 将图片二进制数据转换为 Base64 编码格式，保存在 base64Image 变量中。
   // 构建完整的图片数据 URI，以 data:image/png;base64, 开头，后跟 Base64 编码的图片数据。
   // 返回处理后的图片数据 URI 数组。
-  function getCutImages(platform, guildId) {
+  function getCutImages(platform: string, guildId: string): string[] {
     const files = fs.readdirSync(cutImagesPath);
     return files
-      .filter(file => file.startsWith(platform + '_' + guildId))
-      .slice(0, 3)
+      .filter(file => {
+        const modifiedFile = file.startsWith(`${platform}_${guildId}`.replace(':', ''));
+        const endsWithPreOrNow = !file.endsWith("pre.png") && !file.endsWith("now.png");
+        return modifiedFile && endsWithPreOrNow;
+      })
+      .slice(0, config.cut_count)
       .map(file => {
         const imagePath = path.join(cutImagesPath, file);
         const imageBuffer = fs.readFileSync(imagePath);
@@ -192,40 +206,114 @@ export function apply(ctx: Context, config: Config) {
 
   // 传入「图片URL，保存路径」，下载图片
   async function downloadImage(url, outputPath) {
-    const response = await axios.get(url, { responseType: 'arraybuffer' });
-    fs.writeFileSync(outputPath, Buffer.from(response.data, 'binary'));
+    const responseType: 'arraybuffer' = 'arraybuffer';
+    const config = {
+      responseType
+    };
+
+    // koishi内置网络服务，使用 ctx.http 发起请求时，返回的结果是直接解构出来的
+    const responseData = await ctx.http('get', url, config);
+    fs.writeFileSync(outputPath, Buffer.from(responseData, 'binary'));
   }
 
 
-  // 切一小段，返回base64
-  async function randomCropImage(inputImagePath: string, outputImagePath: string, width: number, height: number): Promise<void> {
+  async function randomCropImage(inputImagePath: string, outputImagePath: string): Promise<void> {
     try {
-      const image = await loadImage(inputImagePath);
-      const canvas = createCanvas(width, height);
-      const ctx = canvas.getContext('2d');
+      const image = await Jimp.read(inputImagePath);
 
       // 随机计算矩形的起始坐标
-      const x = Math.floor(Math.random() * (image.width - width));
-      const y = Math.floor(Math.random() * (image.height - height));
+      const x = Math.floor(Math.random() * (image.bitmap.width - config.cut_width));
+      const y = Math.floor(Math.random() * (image.bitmap.height - config.cut_length));
 
-      // 在画布上绘制图片的指定矩形区域
-      ctx.drawImage(image, x, y, width, height, 0, 0, width, height);
+      // 裁剪图片
+      const croppedImage = image.clone().crop(x, y, config.cut_width, config.cut_length);
 
-      // 将画布保存为图片文件
-      const buffer = canvas.toBuffer('image/jpeg');
-      writeFileSync(outputImagePath, buffer);
+      // 保存裁剪后的图片
+      await croppedImage.writeAsync(outputImagePath);
 
-      // console.log(`切割完成，保存为 ${outputImagePath}`);
+      console.log(`切割完成，保存为 ${outputImagePath}`);
     } catch (error) {
       console.error('切割图片时出错:', error);
     }
   }
 
+  // const sharp = require('sharp');
+
+  // async function randomCropImage(inputImagePath, outputImagePath) {
+  //   try {
+  //     // 使用Sharp读取输入图像
+  //     const image = sharp(inputImagePath);
+  
+  //     // 获取图像的元数据
+  //     const metadata = await image.metadata();
+  
+  //     // 随机计算矩形的起始坐标
+  //     const x = Math.floor(Math.random() * (metadata.width - config.cut_width));
+  //     const y = Math.floor(Math.random() * (metadata.height - config.cut_length));
+  
+  //     // 裁剪图片
+  //     const croppedImage = await image
+  //       .extract({ left: x, top: y, width: config.cut_width, height: config.cut_length })
+  //       .toFile(outputImagePath);
+  
+  //     console.log(`切割完成，保存为 ${outputImagePath}`);
+  //   } catch (error) {
+  //     console.error('切割图片时出错:', error);
+  //   }
+  // }
+
+  // async function randomCropImage(inputImagePath: string, outputImagePath: string): Promise<void> {
+  //   try {
+  //     const image_width = 1002;
+  //     const image_height = 1334;
+
+  //     // 获取图像容器元素
+  //     const imageContainer = document.getElementById('imageContainer');
+
+  //     // 创建 Croppie 实例，并指定图像容器元素
+  //     const croppie = new Croppie(imageContainer, {
+  //       viewport: { width: config.cut_width, height: config.cut_length },
+  //       boundary: { width: image_width, height: image_height },
+  //     });
+
+  //     // 将图像绑定到 Croppie 实例
+  //     await croppie.bind({ url: inputImagePath });
+
+  //     // 随机计算矩形的起始坐标
+  //     const x = Math.floor(Math.random() * (image_width - config.cut_width));
+  //     const y = Math.floor(Math.random() * (image_height - config.cut_length));
+
+  //     // 设置裁剪框的位置
+  //     croppie.setCropBoxData({ left: x, top: y });
+
+  //     // 获取裁剪结果
+  //     const croppedImage = await croppie.result({
+  //       type: 'base64',
+  //       format: 'jpeg',
+  //       quality: 100,
+  //     });
+
+  //     // 将裁剪结果保存为图像文件
+  //     const base64Data = croppedImage.replace(/^data:image\/jpeg;base64,/, '');
+  //     require('fs').writeFileSync(outputImagePath, base64Data, 'base64');
+
+  //     console.log(`切割完成，保存为 ${outputImagePath}`);
+  //   } catch (error) {
+  //     console.error('切割图片时出错:', error);
+  //   }
+  // }
+
+  // // 调用函数并传递输入输出路径
+  // randomCropImage('input.jpg', 'output.jpg');
+
+
+
+
   // 切割图片并保存三次，传入「图片路径，平台，公会ID」返回三张图片的base64（因为randomCropImage返回base64）
   function cropAndSaveImages(inputImagePath, platform, guildId) {
-    for (let i = 1; i <= 3; i++) {
-      const outputImagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}${i}.png`);
-      randomCropImage(inputImagePath, outputImagePath, 300, 100);
+    for (let i = 1; i <= config.cut_count; i++) {
+      const outputImagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}${i}.png`.replace(':', ''));
+      randomCropImage(inputImagePath, outputImagePath);
     }
   }
 
@@ -249,7 +337,6 @@ export function apply(ctx: Context, config: Config) {
           imageUrl = `https://bestdori.com/assets/jp/characters/resourceset/${randomCard.resourceSetName}_rip/${randomChoice}.png`;
         }
       }
-      // console.log(randomCard);
 
       return {
         imageUrl: imageUrl,
@@ -265,6 +352,7 @@ export function apply(ctx: Context, config: Config) {
     if (session.content === 'cck') {
       const platform = session.platform;
       const guildId = session.guildId;
+
 
       const images = getCutImages(platform, guildId);
       // 有缓存
@@ -314,22 +402,21 @@ export function apply(ctx: Context, config: Config) {
         }
 
         // 重命名 "answer_pre" 为 "answer_now"
-        const answerPrePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_pre.png`);
-        const answerNowNewPath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_now.png`);
+        const answerPrePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_pre.png`.replace(':', ''));
+        const answerNowNewPath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_now.png`.replace(':', ''));
         fs.renameSync(answerPrePath, answerNowNewPath);
 
         // 下载图片逻辑，保存为 "answer_pre"
         const RandomCardMsg = await getRandomCardMsg();
         const imageUrl = RandomCardMsg.imageUrl;
         const cardId = RandomCardMsg.cardId;
+        
         const cardId_number: number = parseInt(cardId);
         const characterId = RandomCardMsg.characterId;
-        const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_pre.png`);
+        
+        const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_pre.png`.replace(':', ''));
         const rcd_time = new Date().toISOString(); // 获取当前时间并转换为 ISO 8601 格式的字符串
-        await downloadImage(imageUrl, imagePath);
-
-        // 切割图片并保存三次
-        cropAndSaveImages(imagePath, platform, guildId);
+        
         const rows = [{
           platform: platform,
           guildId: guildId,
@@ -341,14 +428,19 @@ export function apply(ctx: Context, config: Config) {
           counts: 1, // 设置 counts 初始值为 1
           rcd_time: rcd_time // 设置 rcd_time 初始值为空字符串
         }];
-        PassThrough
+        
         await ctx.database.upsert('cck_set', rows, ['platform', 'guildId']);
+        await downloadImage(imageUrl, imagePath);
+
+        // 切割图片并保存三次
+        cropAndSaveImages(imagePath, platform, guildId);
+
       }
       // 第一次使用
       else {
         session.send(`初始化ing～(请稍等)\n玩法介绍：\n将会筛选3/4/5星随机卡面\n随机裁剪三份\n玩家需要发送「是xxx」来猜测，例如：\n「是ksm」「是香澄」「是猫猫头」\n如果不知道可以发送「不知道/bzd」\n每人有三次回答机会～`);
         // 下载图片逻辑，保存为 "answer_now"
-        const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_pre.png`);
+        const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_pre.png`.replace(':', ''));
         const RandomCardMsg = await getRandomCardMsg();
         // 下载
         const imageUrl = RandomCardMsg.imageUrl;
@@ -471,7 +563,7 @@ export function apply(ctx: Context, config: Config) {
           await ctx.database.upsert('cck_set', newRows, ['platform', 'guildId']);
 
           // 「二」发送消息（前端任务结束）
-          const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_now.png`);
+          const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_now.png`.replace(':', ''));
           // 读取本地图片文件
           const imageBufferRead = fs.readFileSync(imagePath);
           // 将图片转换为 Base64
@@ -526,15 +618,15 @@ export function apply(ctx: Context, config: Config) {
         status: 0, // 设置初始值为 0 表示结束
         answer_now: result[0].answer_pre, // 
         card_id_now: result[0].card_id_pre, //
-        answer_pre: 2, // 设置 answer_pre 1
-        card_id_pre: 2, // 设置 card_id_pre 初始值为 1
+        answer_pre: 0, // 设置 answer_pre 0
+        card_id_pre: 0, // 设置 card_id_pre 初始值为 0
         counts: 1, // 设置 counts 初始值为 1
         rcd_time: rcd_time // 设置 rcd_time 初始值为空字符串
       }];
       await ctx.database.upsert('cck_set', rows, ['platform', 'guildId']);
 
       // 「二」发送消息（前端任务结束）
-      const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_now.png`);
+      const imagePath = path.resolve(__dirname, `../assets/cards/${platform}_${guildId}_answer_now.png`.replace(':', ''));
       // 读取本地图片文件
       const imageBufferRead = fs.readFileSync(imagePath);
       // 将图片转换为 Base64
@@ -564,7 +656,7 @@ export function apply(ctx: Context, config: Config) {
       const folderPathDelete = path.resolve(__dirname, '..', 'assets', 'cards');
       // console.log(folderPathDelete);
 
-      const filePrefix = platform + '_' + guildId;
+      const filePrefix = `${platform}_${guildId}`.replace(':', '');
 
       if (fs.existsSync(folderPathDelete)) {
         const files = fs.readdirSync(folderPathDelete);
@@ -588,11 +680,42 @@ export function apply(ctx: Context, config: Config) {
     }
   });
 
+
+  ctx.middleware(async (session, next) => {
+    if (session.content === 'cck -R') {
+      const folderPathDelete = path.resolve(__dirname, '..', 'assets', 'cards');
+
+      const filePrefix = `.png`;
+
+      if (fs.existsSync(folderPathDelete)) {
+        const files = fs.readdirSync(folderPathDelete);
+        files.forEach((file) => {
+          const filePath = path.join(folderPathDelete, file);
+          // console.log(filePath);
+          const stats = fs.statSync(filePath);
+
+          if (stats.isFile() && file.endsWith(filePrefix)) {
+            fs.unlinkSync(filePath);
+            console.log(`文件 ${filePath} 已成功删除！`);
+          }
+        });
+      } else {
+        console.log(`文件夹 ${folderPathDelete} 不存在。`);
+      }
+
+      return next();
+    } else {
+      return next();
+    }
+  });
+
+
   ctx.command('邦邦猜卡', 'BanG Dream！卡面猜猜看！')
-    .usage('开始游戏：\n「cck」// 猜猜看\n猜测，例如：\n「是ksm」「是香澄」「是猫猫头」\n结束游戏：\n「不知道」「bzd」\n每人有三次回答机会，默认cd为5秒\n重置资源：\n「cck -D」')
+    .usage('开始游戏：\n「cck」// 猜猜看\n猜测，例如：\n「是ksm」「是香澄」「是猫猫头」\n结束游戏：\n「不知道」「bzd」\n每人有三次回答机会，默认cd为5秒\n重置本群资源：\n「cck -D」\n重置全部资源：\n「cck -R」')
   PassThrough
 
 }
+
 
 
 
