@@ -43,7 +43,7 @@ export interface Config {
   cut_width: number
   cut_count: number
 }
-export const name = 'test';
+export const name = 'cck';
 
 export interface Config { }
 
