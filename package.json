@@ -16,6 +16,6 @@
     "plugin"
   ],
   "peerDependencies": {
-    "koishi": "^4.13.1"
+    "koishi": "^4.13.0"
   }
 }
