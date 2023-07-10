@@ -73,6 +73,8 @@ export function apply(ctx: Context, config: Config) {
     }, {
       // 使用自增的主键值
       autoInc: true,
+      // 联合唯一索引
+      unique: [['platform', 'userId', 'guildId']],
     })
     console.log('数据表创建成功：');
   } catch (error) {
@@ -103,8 +105,9 @@ export function apply(ctx: Context, config: Config) {
 
       cut_name: 'string',
     }, {
-      // 使用自增的主键值
+      // 使用自增的主键值，联合唯一索引
       autoInc: true,
+      unique: [['platform', 'guildId']],
     })
     console.log('数据表创建成功：');
   } catch (error) {
@@ -703,7 +706,7 @@ export function apply(ctx: Context, config: Config) {
     });
 
   ctx.middleware((session, next) => {
-    console.log(session.content);
+    // console.log(session.content);
     if (session.content.startsWith('是')) {
       if (session.content[2] === ' ') {
         return next();
@@ -875,4 +878,3 @@ export function apply(ctx: Context, config: Config) {
 
 // // 调用函数并传递输入输出路径
 // randomCropImage('input.jpg', 'output.jpg');
-
